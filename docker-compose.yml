@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  ai-service:
+    build: .
+    container_name: asrp-ai-service
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - AI_API_KEY=${AI_API_KEY:-asrp_ai_secret_key_2026}
+      - BACKEND_API_URL=${BACKEND_API_URL:-https://api.asrp.io.vn}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-fallback}
+      - VECTOR_STORAGE_DIR=/app/data/vectors
+    volumes:
+      - ./data/vectors:/app/data/vectors
