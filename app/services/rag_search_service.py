@@ -378,19 +378,27 @@ class RagSearchService:
             filters=filters
         )
 
-        candidates_with_meta: List[Tuple[Dict[str, Any], Optional[float]]] = []
+        # Group by branch so each distinct branch has 1 best matching dish card
+        best_candidate_per_branch: Dict[str, Tuple[Dict[str, Any], Optional[float], float]] = {}
+
         for res in results:
             meta = res["metadata"]
-            dish_name = meta.get("name", "")
-            cat_name = meta.get("category_name", "")
+            dish_name = meta.get("name", "").lower()
+            b_id = str(meta.get("branch_id", ""))
+            price = float(meta.get("price", 0.0))
 
-            # If user searched for a dish topic (e.g. "phở"), ensure the candidate actually matches
+            # 1. If user searched for a dish topic (e.g. "cơm", "phở"), STRICTLY require dish name to match
+            relevance_score = 10.0
             if dish_topic:
                 topic_words = [w for w in dish_topic.split() if len(w) >= 2]
-                name_match = all(w in dish_name.lower() for w in topic_words)
-                cat_match = all(w in cat_name.lower() for w in topic_words)
-                if not name_match and not cat_match:
+                name_match = all(w in dish_name for w in topic_words)
+                if not name_match:
                     continue
+                # Boost score if dish name starts with or directly is the topic
+                if dish_name.startswith(dish_topic):
+                    relevance_score = 30.0
+                else:
+                    relevance_score = 20.0
 
             dist_km: Optional[float] = None
             b_lat = meta.get("latitude")
@@ -401,17 +409,24 @@ class RagSearchService:
                 except Exception:
                     dist_km = None
 
-            candidates_with_meta.append((meta, dist_km))
+            # For each branch, keep the highest scoring dish (lowest price if scores are equal)
+            if b_id not in best_candidate_per_branch:
+                best_candidate_per_branch[b_id] = (meta, dist_km, relevance_score)
+            else:
+                existing_meta, existing_dist, existing_score = best_candidate_per_branch[b_id]
+                existing_price = float(existing_meta.get("price", 0.0))
+                if relevance_score > existing_score or (relevance_score == existing_score and price < existing_price):
+                    best_candidate_per_branch[b_id] = (meta, dist_km, relevance_score)
 
-        # Sort: if query explicitly asks for nearest or user GPS is given, prioritize distance
-        if "gần" in query.lower() or "quanh đây" in query.lower() or "gần nhất" in query.lower():
-            candidates_with_meta.sort(key=lambda x: (x[1] if x[1] is not None else 9999.0))
-        elif user_lat is not None and user_lng is not None:
-            # Sort by balance of price and distance
-            candidates_with_meta.sort(key=lambda x: (x[1] if x[1] is not None else 9999.0, x[0].get("price", 0)))
+        candidates_with_meta = list(best_candidate_per_branch.values())
+
+        # Sort: 1. Dish relevance score DESC, 2. Price ASC (lowest price first), 3. Distance
+        candidates_with_meta.sort(
+            key=lambda x: (-x[2], x[0].get("price", 0.0), x[1] if x[1] is not None else 9999.0)
+        )
 
         cards: List[BranchRecommendationCard] = []
-        for meta, dist_km in candidates_with_meta:
+        for meta, dist_km, _ in candidates_with_meta:
             dish_name = meta.get("name", "")
             price = meta.get("price", 0.0)
             price_text = f"{int(price):,}đ".replace(",", ".")
@@ -450,7 +465,7 @@ class RagSearchService:
                 tag=tag
             )
             cards.append(card)
-            if len(cards) >= top_k:
+            if len(cards) >= max(top_k, 25):
                 break
 
         # Generate dynamic contextual reply and chips

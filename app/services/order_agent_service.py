@@ -111,19 +111,13 @@ class OrderAgentService:
         selected_branch_id = branch_id if has_active_branch else None
 
         # 2. Check if user mentioned a specific branch in the message
-        all_branch_candidates = vector_store.search_hybrid(
-            query_vector=[0.0] * 1536,
-            doc_type="menu_item",
-            top_k=100,
-            filters={"is_available": True}
-        )
-
         distinct_branches = {}
-        for b_cand in all_branch_candidates:
-            b_id = b_cand["metadata"].get("branch_id")
-            b_name = b_cand["metadata"].get("branch_name", "")
-            if b_id and b_name and b_id not in distinct_branches:
-                distinct_branches[b_id] = b_name
+        for doc in vector_store.documents.values():
+            if doc.doc_type == "menu_item":
+                b_id = doc.metadata.get("branch_id")
+                b_name = doc.metadata.get("branch_name", "")
+                if b_id and b_name and b_id not in distinct_branches:
+                    distinct_branches[b_id] = b_name
 
         if not selected_branch_id:
             # Sort branches by name length descending to match specific names first
