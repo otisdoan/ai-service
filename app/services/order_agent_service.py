@@ -107,36 +107,50 @@ class OrderAgentService:
         msg = message.lower().strip()
         has_active_branch = bool(branch_id and branch_id != "00000000-0000-0000-0000-000000000000" and branch_id != "all")
 
-        # Check if user mentioned a specific branch in the message
+        # 1. If branch_id was explicitly provided, use it directly
+        selected_branch_id = branch_id if has_active_branch else None
+
+        # 2. Check if user mentioned a specific branch in the message
         all_branch_candidates = vector_store.search_hybrid(
             query_vector=[0.0] * 1536,
             doc_type="menu_item",
-            top_k=50,
+            top_k=100,
             filters={"is_available": True}
         )
-        matched_branch_from_msg = None
+
+        distinct_branches = {}
         for b_cand in all_branch_candidates:
+            b_id = b_cand["metadata"].get("branch_id")
             b_name = b_cand["metadata"].get("branch_name", "")
-            if b_name and b_name.lower() in msg:
-                matched_branch_from_msg = b_cand["metadata"].get("branch_id")
-                break
+            if b_id and b_name and b_id not in distinct_branches:
+                distinct_branches[b_id] = b_name
 
-        # Check if previous message in chat_history mentioned a branch or was a branch menu response
-        matched_branch_from_history = None
-        if not has_active_branch and not matched_branch_from_msg and chat_history:
-            for hist_msg in reversed(chat_history):
-                hist_content = getattr(hist_msg, "content", None) or (hist_msg.get("content") if isinstance(hist_msg, dict) else str(hist_msg))
-                if hist_content:
-                    hist_text = hist_content.lower()
-                    for b_cand in all_branch_candidates:
-                        b_name = b_cand["metadata"].get("branch_name", "")
-                        if b_name and b_name.lower() in hist_text:
-                            matched_branch_from_history = b_cand["metadata"].get("branch_id")
+        if not selected_branch_id:
+            # Sort branches by name length descending to match specific names first
+            sorted_branches = sorted(distinct_branches.items(), key=lambda x: len(x[1]), reverse=True)
+            for b_id, b_name in sorted_branches:
+                b_name_lower = b_name.lower().strip()
+                clean_b_name = re.sub(r'^(dinex|quán|tiệm|chi nhánh)\s+', '', b_name_lower).strip()
+                if (b_name_lower and b_name_lower in msg) or (clean_b_name and len(clean_b_name) >= 3 and clean_b_name in msg):
+                    selected_branch_id = b_id
+                    break
+
+        # 3. Check if previous message explicitly indicated a branch context (e.g. "quán đó", "ở đây", "đầu tiên")
+        if not selected_branch_id and chat_history:
+            is_referring_to_history = any(ref in msg for ref in ["quán đó", "quan do", "chi nhánh đó", "chi nhanh do", "ở đây", "o day", "đầu tiên", "dau tien", "quán 1", "quan 1"])
+            if is_referring_to_history:
+                for hist_msg in reversed(chat_history):
+                    hist_content = getattr(hist_msg, "content", None) or (hist_msg.get("content") if isinstance(hist_msg, dict) else str(hist_msg))
+                    if hist_content:
+                        hist_text = hist_content.lower()
+                        for b_id, b_name in sorted(distinct_branches.items(), key=lambda x: len(x[1]), reverse=True):
+                            b_name_lower = b_name.lower().strip()
+                            clean_b_name = re.sub(r'^(dinex|quán|tiệm|chi nhánh)\s+', '', b_name_lower).strip()
+                            if (b_name_lower and b_name_lower in hist_text) or (clean_b_name and len(clean_b_name) >= 3 and clean_b_name in hist_text):
+                                selected_branch_id = b_id
+                                break
+                        if selected_branch_id:
                             break
-                    if matched_branch_from_history:
-                        break
-
-        selected_branch_id = branch_id if has_active_branch else (matched_branch_from_msg or matched_branch_from_history)
 
         # If NO branch is selected and no branch named in message, return branch recommendations so customer can explore & customize
         if not selected_branch_id:
