@@ -370,11 +370,11 @@ class RagSearchService:
         # Generate embedding vector for the query
         query_vector = await embedding_service.get_embedding(query)
 
-        # Retrieve matching candidates
+        # Retrieve matching candidates (scan all items across all active branches)
         results = vector_store.search_hybrid(
             query_vector=query_vector,
             doc_type="menu_item",
-            top_k=50,
+            top_k=500,
             filters=filters
         )
 
