@@ -378,14 +378,15 @@ class RagSearchService:
             filters=filters
         )
 
-        # Group by branch so each distinct branch has 1 best matching dish card
-        best_candidate_per_branch: Dict[str, Tuple[Dict[str, Any], Optional[float], float]] = {}
+        # Collect all distinct matching dishes across branches (deduplicating same dish at same branch)
+        distinct_candidates: Dict[str, Tuple[Dict[str, Any], Optional[float], float]] = {}
 
         for res in results:
             meta = res["metadata"]
-            dish_name = meta.get("name", "").lower()
+            dish_name = meta.get("name", "").lower().strip()
             b_id = str(meta.get("branch_id", ""))
             price = float(meta.get("price", 0.0))
+            unique_key = f"{b_id}_{dish_name}_{int(price)}"
 
             # 1. If user searched for a dish topic (e.g. "cơm", "phở"), STRICTLY require dish name to match
             relevance_score = 10.0
@@ -409,16 +410,10 @@ class RagSearchService:
                 except Exception:
                     dist_km = None
 
-            # For each branch, keep the highest scoring dish (lowest price if scores are equal)
-            if b_id not in best_candidate_per_branch:
-                best_candidate_per_branch[b_id] = (meta, dist_km, relevance_score)
-            else:
-                existing_meta, existing_dist, existing_score = best_candidate_per_branch[b_id]
-                existing_price = float(existing_meta.get("price", 0.0))
-                if relevance_score > existing_score or (relevance_score == existing_score and price < existing_price):
-                    best_candidate_per_branch[b_id] = (meta, dist_km, relevance_score)
+            if unique_key not in distinct_candidates:
+                distinct_candidates[unique_key] = (meta, dist_km, relevance_score)
 
-        candidates_with_meta = list(best_candidate_per_branch.values())
+        candidates_with_meta = list(distinct_candidates.values())
 
         # Sort: 1. Dish relevance score DESC, 2. Price ASC (lowest price first), 3. Distance
         candidates_with_meta.sort(
@@ -498,7 +493,11 @@ class RagSearchService:
             return reply
 
         count = len(cards)
-        reply = f"Dạ, tôi đã tìm thấy {count} chi nhánh có món ngon phù hợp với yêu cầu của bạn"
+        distinct_branches_count = len(set(c.branchId for c in cards))
+        if distinct_branches_count > 1:
+            reply = f"Dạ, tôi đã tìm thấy {count} món ngon tại {distinct_branches_count} chi nhánh phù hợp với yêu cầu của bạn"
+        else:
+            reply = f"Dạ, tôi đã tìm thấy {count} món ngon phù hợp với yêu cầu của bạn"
         if "max_price" in filters:
             min_str = f"{int(cards[0].priceAmount):,}".replace(",", ".") + "đ"
             max_str = f"{int(filters['max_price']):,}".replace(",", ".") + "đ"
